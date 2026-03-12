@@ -126,6 +126,19 @@ class Database:
                 )
             """)
             
+            # Login history table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS login_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    success BOOLEAN NOT NULL,
+                    ip_address TEXT DEFAULT '127.0.0.1',
+                    user_agent TEXT DEFAULT '',
+                    reason TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Create default admin and user if not exists
             # Ensure schema migrations for older DBs: add missing columns
             cursor.execute("PRAGMA table_info(users)")
@@ -403,12 +416,13 @@ class Database:
             return []
 
     def authenticate_user(self, username: str, password: str) -> dict:
-        """Authenticate a user"""
+        """Authenticate a user."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, username, email, role, password_hash, full_name, status, created_at, last_login 
+                    SELECT id, username, email, role, password_hash, full_name, status,
+                           created_at, last_login
                     FROM users WHERE username = ?
                 """, (username,))
                 row = cursor.fetchone()
@@ -433,7 +447,7 @@ class Database:
                             'full_name': row[5],
                             'status': row[6],
                             'created_at': row[7],
-                            'last_login': row[8]
+                            'last_login': row[8],
                         }
         except Exception as e:
             logger.error(f"Error authenticating user: {e}")
@@ -536,6 +550,63 @@ class Database:
         except Exception as e:
             logger.error(f"Error deleting user: {e}")
         return False
+
+    # Login history operations
+    def record_login(self, username: str, success: bool, ip_address: str = "127.0.0.1",
+                     user_agent: str = "", reason: str = "") -> bool:
+        """Record a login attempt in history."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO login_history (username, success, ip_address, user_agent, reason)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (username, success, ip_address, user_agent, reason))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error recording login: {e}")
+            return False
+
+    def get_login_history(self, username: str = None, limit: int = 50) -> List[Dict]:
+        """Get login history, optionally filtered by username."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if username:
+                    cursor.execute("""
+                        SELECT id, username, success, ip_address, user_agent, reason, created_at
+                        FROM login_history WHERE username = ?
+                        ORDER BY created_at DESC LIMIT ?
+                    """, (username, limit))
+                else:
+                    cursor.execute("""
+                        SELECT id, username, success, ip_address, user_agent, reason, created_at
+                        FROM login_history ORDER BY created_at DESC LIMIT ?
+                    """, (limit,))
+                rows = cursor.fetchall()
+                return [{
+                    'id': r[0], 'username': r[1], 'success': bool(r[2]),
+                    'ip_address': r[3], 'user_agent': r[4], 'reason': r[5],
+                    'created_at': r[6]
+                } for r in rows]
+        except Exception as e:
+            logger.error(f"Error getting login history: {e}")
+            return []
+
+    def create_task(self, agent_id: str, task_type: str = "general", details: str = "") -> bool:
+        """Create a remediation or general task linked to an agent.
+
+        Tasks are stored as events with event_type 'task_created' so they
+        appear in the audit trail alongside other events.
+        """
+        return self.log_event(
+            event_type="task_created",
+            agent_id=agent_id,
+            action=task_type,
+            details=details,
+            status="pending"
+        )
 
 
 # Global database instance
