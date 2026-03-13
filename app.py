@@ -781,6 +781,7 @@ _NAV_ICONS = {
     "Reports": "\u2637",
     "AI Assistant": "\u269b",
     "Settings": "\u2638",
+    "Security Audit": "\u2622",
 }
 
 
@@ -812,6 +813,8 @@ def get_nav_sections():
     security_pages = []
     if is_operator() or is_admin():
         security_pages.append("Security Dashboard")
+        if is_admin():
+            security_pages.append("Security Audit")
     if security_pages:
         sections["Security"] = security_pages
 
@@ -1011,6 +1014,8 @@ def main():
         show_risk_assessment(st.session_state.db)
     elif page == "Security Dashboard":
         show_page_security_dashboard()
+    elif page == "Security Audit":
+        show_page_security_audit()
 
 
 # ---- HOME ----
@@ -1328,7 +1333,7 @@ def show_page_security_dashboard():
 
     spacer()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Active Protections", "Security Events", "Login History", "Configuration"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Active Protections", "Security Events", "Login History", "Configuration", "External Scan Results"])
 
     with tab1:
         section_label("Security Protections Status")
@@ -1533,6 +1538,253 @@ def show_page_security_dashboard():
                         st.session_state.account_security.locked_accounts.clear()
                         st.session_state.account_security.failed_attempts.clear()
                     st.success("All accounts unlocked")
+
+    with tab5:
+        section_label("External Security Scan Results")
+        st.markdown("""<p style="color:var(--text-muted); font-size:0.82rem;">
+            Results pushed from the external IAM-Security-Tester tool
+        </p>""", unsafe_allow_html=True)
+
+        latest_run_id = db.get_latest_test_run()
+        if not latest_run_id:
+            st.markdown("""<div class="glass-card" style="text-align:center; padding:3rem;">
+                <div style="font-size:2.5rem; margin-bottom:0.75rem;">🔒</div>
+                <p style="color:var(--text-muted) !important; font-weight:600;">No External Scan Results Yet</p>
+                <p style="font-size:0.8rem; color:var(--text-muted);">
+                    Run the IAM-Security-Tester and click "Push to IAM Dashboard" to see results here.
+                </p>
+            </div>""", unsafe_allow_html=True)
+        else:
+            summary = db.get_test_summary(latest_run_id)
+            all_results = db.get_test_results(latest_run_id)
+
+            if summary:
+                sm1, sm2, sm3, sm4 = st.columns(4)
+                with sm1:
+                    st.markdown(f"""<div class="metric-card">
+                        <div class="metric-value">{summary.get('total', 0)}</div>
+                        <div class="metric-label">Total Tests</div>
+                    </div>""", unsafe_allow_html=True)
+                with sm2:
+                    st.markdown(f"""<div class="metric-card">
+                        <div class="metric-value" style="color:var(--success);">{summary.get('passed', 0)}</div>
+                        <div class="metric-label">Passed</div>
+                    </div>""", unsafe_allow_html=True)
+                with sm3:
+                    st.markdown(f"""<div class="metric-card">
+                        <div class="metric-value" style="color:var(--danger);">{summary.get('failed', 0)}</div>
+                        <div class="metric-label">Failed</div>
+                    </div>""", unsafe_allow_html=True)
+                with sm4:
+                    st.markdown(f"""<div class="metric-card">
+                        <div class="metric-value" style="color:#ff4444;">{summary.get('critical', 0)}</div>
+                        <div class="metric-label">Critical</div>
+                    </div>""", unsafe_allow_html=True)
+
+                spacer()
+
+            if all_results:
+                severity_colors = {
+                    "critical": "#ff4444", "high": "#ff8800",
+                    "medium": "#ffcc00", "low": "#44cc44", "info": "#4488ff",
+                }
+
+                categories_map = {}
+                for r in all_results:
+                    categories_map.setdefault(r.get('category', 'Unknown'), []).append(r)
+
+                for cat_name, cat_results in categories_map.items():
+                    passed_count = sum(1 for r in cat_results if r.get('passed'))
+                    failed_count = len(cat_results) - passed_count
+                    status_icon = "+" if failed_count == 0 else "!" if failed_count <= 2 else "X"
+
+                    with st.expander(f"{status_icon} {cat_name}  ({passed_count} passed, {failed_count} failed)", expanded=failed_count > 0):
+                        for r in cat_results:
+                            sev = r.get('severity', 'info')
+                            color = severity_colors.get(sev, '#888')
+                            passed = r.get('passed', False)
+                            icon_color = "var(--success)" if passed else "var(--danger)"
+                            icon = "PASS" if passed else "FAIL"
+
+                            st.markdown(f"""<div style="padding:0.5rem 0.75rem; margin-bottom:0.4rem;
+                                border-left:3px solid {color}; background:var(--bg-glass);
+                                border-radius:0 6px 6px 0;">
+                                <div style="display:flex; align-items:center; gap:0.5rem;">
+                                    <span style="color:{icon_color}; font-weight:700; font-size:0.75rem;">{icon}</span>
+                                    <span style="background:{color}; color:#fff; padding:0.1rem 0.5rem;
+                                        border-radius:10px; font-size:0.7rem; font-weight:700;
+                                        text-transform:uppercase;">{sev}</span>
+                                    <span style="color:var(--text-primary); font-weight:600; font-size:0.85rem;">
+                                        {r.get('name', 'Unknown Test')}</span>
+                                </div>
+                                <div style="color:var(--text-muted); font-size:0.78rem; margin-top:0.3rem;">
+                                    {r.get('details', '')}
+                                </div>
+                                {'<div style="color:var(--text-muted); font-size:0.75rem; margin-top:0.2rem; font-style:italic;">Recommendation: ' + r.get("recommendation", "") + '</div>' if r.get("recommendation") else ''}
+                            </div>""", unsafe_allow_html=True)
+
+                spacer()
+                st.markdown(f"""<div style="text-align:center; color:var(--text-muted); font-size:0.78rem;">
+                    Run ID: {latest_run_id} | {len(all_results)} total results
+                </div>""", unsafe_allow_html=True)
+
+
+# ---- SECURITY AUDIT ----
+
+def show_page_security_audit():
+    if not is_admin():
+        st.error("Access Denied - Admin only")
+        return
+
+    st.markdown("""<div class="page-header">
+        <h1 style="font-size:1.75rem !important; margin-bottom:0.25rem; font-weight:800;">
+            \u2622 Security Audit
+        </h1>
+        <p style="color:var(--text-muted) !important; font-size:0.88rem;">
+            Run attack simulations against system protections and review results
+        </p>
+    </div>""", unsafe_allow_html=True)
+
+    db = st.session_state.db
+
+    # -- Top bar: category selector + run button + last run info --
+    from utils.security_tester import ALL_CATEGORIES
+
+    col1, col2, col3 = st.columns([1.5, 1, 2])
+    with col1:
+        category_options = ["All Categories"] + ALL_CATEGORIES
+        selected_category = st.selectbox("Test Category", category_options, label_visibility="collapsed")
+    with col2:
+        run_clicked = st.button("\u25b6 Run Security Audit", type="primary", use_container_width=True)
+    with col3:
+        latest_run_id = db.get_latest_test_run()
+        if latest_run_id:
+            summary = db.get_test_summary(latest_run_id)
+            if summary:
+                st.markdown(
+                    f"<div style='padding:0.5rem; color:var(--text-muted); font-size:0.85rem;'>"
+                    f"Last run: {summary.get('created_at', 'N/A')} &mdash; "
+                    f"{summary.get('passed', 0)}/{summary.get('total', 0)} passed</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No audit results yet. Click Run to start.")
+
+    # -- Run tests if button clicked --
+    if run_clicked:
+        with st.spinner("Running security tests... This may take a moment."):
+            from utils.security_tester import SecurityTestEngine
+            from dataclasses import asdict
+            engine = SecurityTestEngine(db=db)
+            if selected_category == "All Categories":
+                run_id, results = engine.run_all_tests()
+            else:
+                run_id, results = engine.run_category(selected_category)
+            db.save_test_results(run_id, [asdict(r) for r in results])
+            st.session_state['_last_audit_run_id'] = run_id
+            st.rerun()
+
+    # -- Display results --
+    display_run_id = st.session_state.get('_last_audit_run_id') or db.get_latest_test_run()
+    if not display_run_id:
+        return
+
+    summary = db.get_test_summary(display_run_id)
+    all_results = db.get_test_results(display_run_id)
+    if not summary or not all_results:
+        return
+
+    # -- Metrics row --
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-value">{summary['total']}</div>
+            <div class="metric-label">Total Tests</div>
+        </div>""", unsafe_allow_html=True)
+    with m2:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-value" style="color:var(--success);">{summary['passed']}</div>
+            <div class="metric-label">Passed</div>
+        </div>""", unsafe_allow_html=True)
+    with m3:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-value" style="color:var(--danger);">{summary['failed']}</div>
+            <div class="metric-label">Failed</div>
+        </div>""", unsafe_allow_html=True)
+    with m4:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-value" style="color:#ff4444;">{summary['critical']}</div>
+            <div class="metric-label">Critical Issues</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # -- Results by category --
+    severity_colors = {
+        "critical": "#ff4444",
+        "high": "#ff8800",
+        "medium": "#ffcc00",
+        "low": "#44cc44",
+        "info": "#4488ff",
+    }
+
+    # Group results by category
+    categories: dict = {}
+    for r in all_results:
+        categories.setdefault(r['category'], []).append(r)
+
+    for cat_name, cat_results in categories.items():
+        passed_count = sum(1 for r in cat_results if r['passed'])
+        failed_count = len(cat_results) - passed_count
+        status_icon = "\u2705" if failed_count == 0 else "\u26a0\ufe0f" if failed_count <= 2 else "\u274c"
+
+        with st.expander(f"{status_icon} {cat_name}  ({passed_count} passed, {failed_count} failed)", expanded=failed_count > 0):
+            for r in cat_results:
+                sev = r.get('severity', 'info')
+                color = severity_colors.get(sev, '#888')
+                icon = "\u2714" if r['passed'] else "\u2718"
+                icon_color = "var(--success)" if r['passed'] else "var(--danger)"
+
+                result_html = f"""<div style="padding:0.5rem 0.75rem; margin-bottom:0.4rem;
+                    border-left:3px solid {color}; background:var(--bg-glass);
+                    border-radius:0 6px 6px 0;">
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                        <span style="color:{icon_color}; font-size:1rem;">{icon}</span>
+                        <span class="badge" style="background:{color}; color:#fff;
+                            padding:2px 8px; border-radius:10px; font-size:0.7rem;
+                            font-weight:600; text-transform:uppercase;">{sev}</span>
+                        <span style="color:var(--text-primary); font-weight:500;
+                            font-size:0.88rem;">{r['name']}</span>
+                    </div>
+                    <div style="color:var(--text-muted); font-size:0.8rem;
+                        margin-top:0.25rem; padding-left:1.8rem;">{r['details'][:200]}</div>"""
+
+                if not r['passed'] and r.get('recommendation'):
+                    result_html += f"""<div style="color:var(--warning); font-size:0.78rem;
+                        margin-top:0.2rem; padding-left:1.8rem;">
+                        \u27a4 {r['recommendation'][:200]}</div>"""
+
+                result_html += "</div>"
+                st.markdown(result_html, unsafe_allow_html=True)
+
+    # -- Previous runs --
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""<div style="font-size:1rem; font-weight:700; color:var(--text-primary);
+        margin-bottom:0.5rem;">Previous Runs</div>""", unsafe_allow_html=True)
+
+    runs = db.get_test_runs(limit=10)
+    if runs:
+        import pandas as pd
+        df = pd.DataFrame(runs)
+        df = df.rename(columns={
+            'run_id': 'Run ID', 'total': 'Total', 'passed': 'Passed',
+            'failed': 'Failed', 'critical': 'Critical', 'created_at': 'Date',
+        })
+        if 'Run ID' in df.columns:
+            df['Run ID'] = df['Run ID'].str[:8] + '...'
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No previous runs found.")
 
 
 # ---- REPORTS ----

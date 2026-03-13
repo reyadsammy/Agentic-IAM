@@ -139,6 +139,22 @@ class Database:
                 )
             """)
 
+            # Security test results table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS security_test_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    test_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    passed BOOLEAN NOT NULL,
+                    details TEXT,
+                    recommendation TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Create default admin and user if not exists
             # Ensure schema migrations for older DBs: add missing columns
             cursor.execute("PRAGMA table_info(users)")
@@ -607,6 +623,120 @@ class Database:
             details=details,
             status="pending"
         )
+
+    # Security test results operations
+    def save_test_results(self, run_id: str, results: list) -> bool:
+        """Save a batch of security test results for a given run_id."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                for r in results:
+                    cursor.execute("""
+                        INSERT INTO security_test_results
+                            (run_id, test_id, category, name, severity, passed, details, recommendation)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        run_id,
+                        r.get('test_id', ''),
+                        r.get('category', ''),
+                        r.get('name', ''),
+                        r.get('severity', 'info'),
+                        r.get('passed', False),
+                        r.get('details', ''),
+                        r.get('recommendation', ''),
+                    ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error saving test results: {e}")
+            return False
+
+    def get_test_results(self, run_id: str) -> List[Dict]:
+        """Get all results for a specific run_id."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT run_id, test_id, category, name, severity, passed,
+                           details, recommendation, created_at
+                    FROM security_test_results
+                    WHERE run_id = ?
+                    ORDER BY id
+                """, (run_id,))
+                rows = cursor.fetchall()
+                return [{
+                    'run_id': r[0], 'test_id': r[1], 'category': r[2],
+                    'name': r[3], 'severity': r[4], 'passed': bool(r[5]),
+                    'details': r[6], 'recommendation': r[7], 'created_at': r[8],
+                } for r in rows]
+        except Exception as e:
+            logger.error(f"Error getting test results: {e}")
+            return []
+
+    def get_test_runs(self, limit: int = 10) -> List[Dict]:
+        """Get distinct run_ids with aggregated counts."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT run_id,
+                           COUNT(*) as total,
+                           SUM(CASE WHEN passed = 1 THEN 1 ELSE 0 END) as passed,
+                           SUM(CASE WHEN passed = 0 THEN 1 ELSE 0 END) as failed,
+                           SUM(CASE WHEN passed = 0 AND severity = 'critical' THEN 1 ELSE 0 END) as critical,
+                           MIN(created_at) as created_at
+                    FROM security_test_results
+                    GROUP BY run_id
+                    ORDER BY MIN(created_at) DESC
+                    LIMIT ?
+                """, (limit,))
+                rows = cursor.fetchall()
+                return [{
+                    'run_id': r[0], 'total': r[1], 'passed': r[2],
+                    'failed': r[3], 'critical': r[4], 'created_at': r[5],
+                } for r in rows]
+        except Exception as e:
+            logger.error(f"Error getting test runs: {e}")
+            return []
+
+    def get_latest_test_run(self) -> Optional[str]:
+        """Get the most recent run_id."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT run_id FROM security_test_results
+                    ORDER BY created_at DESC LIMIT 1
+                """)
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Error getting latest test run: {e}")
+            return None
+
+    def get_test_summary(self, run_id: str) -> Optional[Dict]:
+        """Get aggregated summary for a specific run."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN passed = 1 THEN 1 ELSE 0 END) as passed,
+                           SUM(CASE WHEN passed = 0 THEN 1 ELSE 0 END) as failed,
+                           SUM(CASE WHEN passed = 0 AND severity = 'critical' THEN 1 ELSE 0 END) as critical,
+                           MIN(created_at) as created_at
+                    FROM security_test_results
+                    WHERE run_id = ?
+                """, (run_id,))
+                row = cursor.fetchone()
+                if row and row[0] > 0:
+                    return {
+                        'run_id': run_id, 'total': row[0], 'passed': row[1],
+                        'failed': row[2], 'critical': row[3], 'created_at': row[4],
+                    }
+        except Exception as e:
+            logger.error(f"Error getting test summary: {e}")
+        return None
 
 
 # Global database instance
