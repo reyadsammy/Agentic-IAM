@@ -67,6 +67,16 @@ class IntelligenceEngine:
 		risk = 'low' if score > 0.75 else ('medium' if score > 0.4 else 'high')
 		return TrustScore(score, risk, confidence=0.7)
 
+	async def update_trust_score(self, agent_id: str, event_type: str, context: Dict = None):
+		"""Update trust score based on an event (authentication, authorization, etc.)."""
+		# In production this would adjust the score based on event history
+		# For now, just recalculate
+		return await self.calculate_trust_score(agent_id)
+
+	async def initialize_agent_score(self, agent_id: str):
+		"""Initialize trust score for a newly registered agent."""
+		return await self.calculate_trust_score(agent_id)
+
 	async def detect_anomaly(self, features: Dict) -> bool:
 		"""Detect if the given features indicate anomalous behavior."""
 		if not SKLEARN_AVAILABLE or not self.anomaly_model:

@@ -813,6 +813,7 @@ def get_nav_sections():
     security_pages = []
     if is_operator() or is_admin():
         security_pages.append("Security Dashboard")
+        security_pages.append("Store Attack Simulator")
         if is_admin():
             security_pages.append("Security Audit")
     if security_pages:
@@ -1014,6 +1015,9 @@ def main():
         show_risk_assessment(st.session_state.db)
     elif page == "Security Dashboard":
         show_page_security_dashboard()
+    elif page == "Store Attack Simulator":
+        from store_attack_simulator import show_store_attack_simulator
+        show_store_attack_simulator()
     elif page == "Security Audit":
         show_page_security_audit()
 
